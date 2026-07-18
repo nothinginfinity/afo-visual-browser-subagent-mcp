@@ -1,6 +1,6 @@
 # AFO Visual Browser Sub-Agent MCP
 
-Cloudflare-native visual evidence and browser-investigation service. Phase 1 is deliberately public, read-only, deterministic, and receipt-first.
+Cloudflare-native visual evidence and browser-investigation service. The current release is deliberately public, read-only, deterministic, and receipt-first.
 
 ## Phase 1 tools
 
@@ -9,6 +9,13 @@ Cloudflare-native visual evidence and browser-investigation service. Phase 1 is 
 - `capture_snapshot`
 - `capture_multi_viewport`
 - `enqueue_visual_audit`
+- `get_visual_receipt`
+
+## Capture reliability behavior
+
+`capture_screenshot` is a true screenshot-only path. It captures and stores the PNG plus a minimal manifest, navigation timing, page metadata, and cheap console/network counts. It does not call `page.content()`, generate Markdown, request an accessibility snapshot, serialize full console/network artifacts, or create embeddings.
+
+`capture_snapshot` and `capture_multi_viewport` retain the richer evidence pipeline. Text artifacts are limited by encoded UTF-8 byte size, and optional artifact truncation or failure is recorded in `artifact_summary` and `warnings` without invalidating a successfully stored screenshot. Successful runs with optional evidence warnings report `status: "ok_with_warnings"`.
 
 ## Required initial bindings
 
@@ -17,22 +24,22 @@ Cloudflare-native visual evidence and browser-investigation service. Phase 1 is 
 - D1: `DB`
 - R2: `RECEIPTS`
 - Vectorize: `VECTORIZE`
-- Queues: `VISUAL_AUDIT_QUEUE`
+- Queues: `AUDIT_QUEUE`
 - Analytics Engine: `ANALYTICS`
 
 Vectorize, Queues, and Analytics Engine are foundational requirements, not optional roadmap items.
 
 ## Security boundary
 
-Phase 1 accepts public `https:` URLs only. Localhost, private IPv4 ranges, link-local ranges, and private IPv6 ranges are blocked. Query parameters that look like credentials are redacted from receipts.
+The Worker accepts public `https:` URLs only. Localhost, private IPv4 ranges, link-local ranges, and private IPv6 ranges are blocked. Query parameters that look like credentials are redacted from receipts.
 
 ## Before deployment
 
 1. Create the D1 database, R2 bucket, Vectorize index, producer/consumer queue, dead-letter queue, and Analytics Engine dataset.
-2. Replace `REPLACE_WITH_D1_DATABASE_ID` in `wrangler.jsonc`.
-3. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to GitHub Actions or your local environment.
+2. Confirm the D1 database ID and all binding names in `wrangler.jsonc`.
+3. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to GitHub Actions or the local environment.
 4. Apply D1 migrations.
 5. Run `npm install`, `npm run check`, and `npm test`.
-6. Deploy and verify `/status`, MCP initialization, and one screenshot against a safe public test page.
+6. Deploy and verify `/status`, `/tools`, MCP initialization, and Link Lane screenshots at the standard viewports.
 
 See `ROADMAP.md` for the complete build order.
