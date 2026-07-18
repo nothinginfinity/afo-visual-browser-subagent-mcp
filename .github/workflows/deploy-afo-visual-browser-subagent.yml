@@ -1,0 +1,163 @@
+name: Deploy AFO Visual Browser Sub-Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-afo-visual-browser-subagent.yml
+      - src/**
+      - migrations/**
+      - test/**
+      - package.json
+      - package-lock.json
+      - wrangler.jsonc
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-afo-visual-browser-subagent
+  cancel-in-progress: false
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      D1_NAME: afo-visual-browser-subagent
+      R2_BUCKET: afo-visual-browser-receipts
+      VECTOR_INDEX: afo-visual-browser-evidence
+      AUDIT_QUEUE: afo-visual-browser-audits
+      AUDIT_DLQ: afo-visual-browser-audits-dlq
+      WORKER_URL: https://afo-visual-browser-subagent-mcp.jaredtechfit.workers.dev
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+
+      - name: Install dependencies
+        shell: bash
+        run: npm install --no-audit --no-fund
+
+      - name: Validate source and deterministic tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run check
+          npm test
+
+      - name: Verify Cloudflare identity
+        shell: bash
+        run: npx wrangler@latest whoami
+
+      - name: Provision or reuse D1
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! npx wrangler@latest d1 info "$D1_NAME" --json > d1-info.json 2>/dev/null; then
+            npx wrangler@latest d1 create "$D1_NAME"
+            npx wrangler@latest d1 info "$D1_NAME" --json > d1-info.json
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const info = JSON.parse(fs.readFileSync('d1-info.json', 'utf8'));
+          function findId(value) {
+            if (!value || typeof value !== 'object') return null;
+            for (const key of ['uuid', 'database_id', 'id']) {
+              if (typeof value[key] === 'string' && /^[0-9a-f-]{32,36}$/i.test(value[key])) return value[key];
+            }
+            for (const child of Object.values(value)) {
+              const found = findId(child);
+              if (found) return found;
+            }
+            return null;
+          }
+          const id = findId(info);
+          if (!id) throw new Error('Could not resolve D1 database UUID');
+          const source = fs.readFileSync('wrangler.jsonc', 'utf8');
+          if (!source.includes('REPLACE_WITH_D1_DATABASE_ID')) throw new Error('Expected D1 placeholder is missing');
+          fs.writeFileSync('wrangler.deploy.jsonc', source.replace('REPLACE_WITH_D1_DATABASE_ID', id));
+          console.log(`Resolved D1 database: ${id}`);
+          NODE
+
+      - name: Provision or reuse R2 bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! npx wrangler@latest r2 bucket list | grep -Fq "$R2_BUCKET"; then
+            npx wrangler@latest r2 bucket create "$R2_BUCKET"
+          fi
+
+      - name: Provision or reuse Vectorize index
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! npx wrangler@latest vectorize list --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.exit(s.includes(process.env.VECTOR_INDEX)?0:1))"; then
+            npx wrangler@latest vectorize create "$VECTOR_INDEX" --dimensions=768 --metric=cosine
+          fi
+
+      - name: Provision or reuse queues
+        shell: bash
+        run: |
+          set -euo pipefail
+          QUEUES_JSON="$(npx wrangler@latest queues list --json)"
+          if ! printf '%s' "$QUEUES_JSON" | grep -Fq "$AUDIT_QUEUE"; then
+            npx wrangler@latest queues create "$AUDIT_QUEUE"
+          fi
+          if ! printf '%s' "$QUEUES_JSON" | grep -Fq "$AUDIT_DLQ"; then
+            npx wrangler@latest queues create "$AUDIT_DLQ"
+          fi
+
+      - name: Apply D1 migrations
+        shell: bash
+        run: npx wrangler@latest d1 migrations apply DB --remote --config wrangler.deploy.jsonc --yes
+
+      - name: Deploy Worker
+        shell: bash
+        run: npx wrangler@latest deploy --config wrangler.deploy.jsonc --yes
+
+      - name: Smoke test live status
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if curl --fail --silent --show-error "$WORKER_URL/status" -o status.json; then
+              cat status.json
+              node <<'NODE'
+              const fs = require('fs');
+              const status = JSON.parse(fs.readFileSync('status.json', 'utf8'));
+              if (!status.ok) throw new Error('Live Worker status is not ok');
+              const required = ['BROWSER', 'AI', 'DB', 'RECEIPTS', 'VECTORIZE', 'AUDIT_QUEUE', 'ANALYTICS'];
+              const missing = required.filter(name => status.bindings?.[name] !== true);
+              if (missing.length) throw new Error(`Missing live bindings: ${missing.join(', ')}`);
+              NODE
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Live status endpoint did not become healthy"
+          exit 1
+
+      - name: Deployment summary
+        shell: bash
+        run: |
+          echo "Commit: $GITHUB_SHA"
+          echo "Worker: afo-visual-browser-subagent-mcp"
+          echo "Status: $WORKER_URL/status"
+          echo "MCP: $WORKER_URL/mcp"
