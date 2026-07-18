@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "afo-route-dns-investigator-mcp",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-05",
+  "workers_dev": true,
+  "vars": {
+    "WORKER_NAME": "afo-route-dns-investigator-mcp",
+    "DEFAULT_SCRIPT_NAME": "afo-binding-investigator-mcp",
+    "ACCOUNT_SUBDOMAIN": "jaredtechfit"
+  },
+  "ai": {
+    "binding": "AI"
+  }
+}
