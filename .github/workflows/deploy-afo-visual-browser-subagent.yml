@@ -28,6 +28,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      ARTIFACT_SIGNING_SECRET: ${{ secrets.ARTIFACT_SIGNING_SECRET }}
       D1_NAME: afo-visual-browser-subagent
       R2_BUCKET: afo-visual-browser-receipts
       VECTOR_INDEX: afo-visual-browser-evidence
@@ -49,6 +50,8 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
           test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$ARTIFACT_SIGNING_SECRET" || { echo "Missing ARTIFACT_SIGNING_SECRET"; exit 1; }
+          test "${#ARTIFACT_SIGNING_SECRET}" -ge 32 || { echo "ARTIFACT_SIGNING_SECRET must be at least 32 characters"; exit 1; }
 
       - name: Install dependencies
         shell: bash
@@ -116,6 +119,12 @@ jobs:
         shell: bash
         run: npx wrangler@latest d1 execute DB --remote --file migrations/0001_initial.sql --config wrangler.deploy.jsonc --yes
 
+      - name: Configure artifact signing secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$ARTIFACT_SIGNING_SECRET" | npx wrangler@latest secret put ARTIFACT_SIGNING_SECRET --config wrangler.deploy.jsonc
+
       - name: Deploy Worker
         shell: bash
         run: npx wrangler@latest deploy --config wrangler.deploy.jsonc
@@ -137,7 +146,7 @@ jobs:
           if (!versionMatches) {
             throw new Error(`Live Worker version ${status.version ?? 'missing'} does not match expected release ${expectedVersion}`);
           }
-          const required = ['BROWSER', 'AI', 'DB', 'RECEIPTS', 'VECTORIZE', 'AUDIT_QUEUE', 'ANALYTICS'];
+          const required = ['BROWSER', 'AI', 'DB', 'RECEIPTS', 'VECTORIZE', 'AUDIT_QUEUE', 'ANALYTICS', 'ARTIFACT_SIGNING_SECRET'];
           const missing = required.filter((name) => status.bindings?.[name] !== true);
           if (missing.length) throw new Error(`Missing live bindings: ${missing.join(', ')}`);
           NODE
@@ -157,13 +166,13 @@ jobs:
           tools_ready=false
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             echo "/tools convergence attempt $attempt/12"
-            if curl --fail --silent --show-error "$WORKER_URL/tools" -o tools.json && node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('tools.json','utf8'));const names=(body.tools||[]).map(tool=>typeof tool==='string'?tool:tool.name);if(!names.includes('get_visual_artifact'))throw new Error('get_visual_artifact missing from /tools');"; then
+            if curl --fail --silent --show-error "$WORKER_URL/tools" -o tools.json && node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('tools.json','utf8'));const names=(body.tools||[]).map(tool=>typeof tool==='string'?tool:tool.name);for(const name of ['get_visual_artifact','create_visual_artifact_url'])if(!names.includes(name))throw new Error(name+' missing from /tools');"; then
               tools_ready=true
               break
             fi
             sleep 10
           done
-          test "$tools_ready" = true || { echo "get_visual_artifact did not appear in /tools"; exit 1; }
+          test "$tools_ready" = true || { echo "Artifact access tools did not appear in /tools"; exit 1; }
 
           mcp_ready=false
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -171,13 +180,81 @@ jobs:
             if curl --fail --silent --show-error \
               -H 'content-type: application/json' \
               --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-              "$WORKER_URL/mcp" -o mcp-tools.json && node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('mcp-tools.json','utf8'));const names=(body.result?.tools||[]).map(tool=>tool.name);if(!names.includes('get_visual_artifact'))throw new Error('get_visual_artifact missing from MCP tools/list');"; then
+              "$WORKER_URL/mcp" -o mcp-tools.json && node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('mcp-tools.json','utf8'));const names=(body.result?.tools||[]).map(tool=>tool.name);for(const name of ['get_visual_artifact','create_visual_artifact_url'])if(!names.includes(name))throw new Error(name+' missing from MCP tools/list');"; then
               mcp_ready=true
               break
             fi
             sleep 10
           done
-          test "$mcp_ready" = true || { echo "get_visual_artifact did not appear in MCP tools/list"; exit 1; }
+          test "$mcp_ready" = true || { echo "Artifact access tools did not appear in MCP tools/list"; exit 1; }
+
+      - name: Smoke test signed artifact retrieval
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler@latest d1 execute DB --remote --config wrangler.deploy.jsonc --json \
+            --command "SELECT run_id, viewport_name FROM visual_runs WHERE artifact_keys_json LIKE '%screenshot%' AND status IN ('ok','ok_with_warnings','completed') ORDER BY created_at DESC LIMIT 1" \
+            > signed-artifact-run.json
+          node <<'NODE'
+          const fs = require('fs');
+          const value = JSON.parse(fs.readFileSync('signed-artifact-run.json', 'utf8'));
+          function findRow(node) {
+            if (!node || typeof node !== 'object') return null;
+            if (typeof node.run_id === 'string') return node;
+            for (const child of Array.isArray(node) ? node : Object.values(node)) {
+              const row = findRow(child);
+              if (row) return row;
+            }
+            return null;
+          }
+          const row = findRow(value);
+          if (!row) throw new Error('No persisted screenshot run is available for signed URL acceptance');
+          fs.writeFileSync('artifact-run.env', `RUN_ID=${row.run_id}\nVIEWPORT=${row.viewport_name || ''}\n`);
+          NODE
+          source artifact-run.env
+
+          node -e "const fs=require('fs');fs.writeFileSync('create-url.json',JSON.stringify({name:'create_visual_artifact_url',arguments:{run_id:process.env.RUN_ID,artifact_type:'screenshot',viewport:process.env.VIEWPORT,ttl_seconds:60}}))"
+          curl --fail --silent --show-error -H 'content-type: application/json' --data @create-url.json "$WORKER_URL/call" -o signed-url.json
+          node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('signed-url.json','utf8'));if(!body.ok||!body.url||!body.expires_at||body.ttl_seconds!==60)throw new Error('Signed URL creation failed');fs.writeFileSync('signed-url.txt',body.url)"
+          SIGNED_URL="$(cat signed-url.txt)"
+          curl --fail --silent --show-error -D signed-headers.txt "$SIGNED_URL" -o signed-artifact.bin
+          grep -Eiq '^content-type: image/png' signed-headers.txt
+          grep -Eiq '^cache-control: private, no-store' signed-headers.txt
+
+          node -e "const fs=require('fs');fs.writeFileSync('direct-artifact.json',JSON.stringify({name:'get_visual_artifact',arguments:{run_id:process.env.RUN_ID,artifact_type:'screenshot',viewport:process.env.VIEWPORT,response_mode:'metadata'}}))"
+          curl --fail --silent --show-error -H 'content-type: application/json' --data @direct-artifact.json "$WORKER_URL/call" -o direct-artifact-result.json
+          node <<'NODE'
+          const fs = require('fs');
+          const crypto = require('crypto');
+          const direct = JSON.parse(fs.readFileSync('direct-artifact-result.json', 'utf8'));
+          const downloaded = crypto.createHash('sha256').update(fs.readFileSync('signed-artifact.bin')).digest('hex');
+          if (!direct.ok || direct.sha256 !== downloaded) throw new Error('Signed artifact bytes do not match persisted artifact integrity metadata');
+          NODE
+
+          node <<'NODE'
+          const fs = require('fs');
+          const original = new URL(fs.readFileSync('signed-url.txt', 'utf8').trim());
+          const variants = [];
+          for (const component of ['run', 'type', 'viewport', 'expires', 'signature']) {
+            const url = new URL(original);
+            if (component === 'run') url.pathname = url.pathname.replace(process.env.RUN_ID, `${process.env.RUN_ID}x`);
+            if (component === 'type') url.pathname = url.pathname.replace('/screenshot', '/console');
+            if (component === 'viewport') url.searchParams.set('viewport', `${url.searchParams.get('viewport') || 'desktop'}x`);
+            if (component === 'expires') url.searchParams.set('expires', String(Number(url.searchParams.get('expires')) + 1));
+            if (component === 'signature') url.searchParams.set('signature', `0${url.searchParams.get('signature').slice(1)}`);
+            variants.push(url.toString());
+          }
+          fs.writeFileSync('tampered-urls.txt', variants.join('\n'));
+          NODE
+          while IFS= read -r url; do
+            test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$url")" = 403
+          done < tampered-urls.txt
+
+          node -e "const fs=require('fs');fs.writeFileSync('expired-url.json',JSON.stringify({name:'create_visual_artifact_url',arguments:{run_id:process.env.RUN_ID,artifact_type:'screenshot',viewport:process.env.VIEWPORT,ttl_seconds:1}}))"
+          curl --fail --silent --show-error -H 'content-type: application/json' --data @expired-url.json "$WORKER_URL/call" -o expires-result.json
+          EXPIRED_URL="$(node -e "const x=require('./expires-result.json');process.stdout.write(x.url)")"
+          sleep 2
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$EXPIRED_URL")" = 403
 
       - name: Deployment summary
         shell: bash
