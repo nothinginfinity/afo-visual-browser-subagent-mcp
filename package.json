@@ -1,10 +1,10 @@
 {
   "name": "afo-visual-browser-subagent-mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/worker.js && node --check src/artifacts.js && node --check src/capture.js",
+    "check": "node --check src/worker.js && node --check src/artifacts.js && node --check src/artifact-access.js && node --check src/capture.js",
     "test": "node --test test/*.test.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
