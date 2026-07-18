@@ -65,6 +65,17 @@ jobs:
         shell: bash
         run: npx wrangler@latest whoami
 
+      - name: Create provisioning config
+        shell: bash
+        run: |
+          cat > wrangler.provision.jsonc <<'JSON'
+          {
+            "name": "afo-visual-browser-subagent-provision",
+            "main": "src/worker.js",
+            "compatibility_date": "2026-07-18"
+          }
+          JSON
+
       - name: Provision or reuse D1
         shell: bash
         run: |
