@@ -7,7 +7,8 @@ Build a deterministic visual QA and controlled browser-interaction service that 
 ## Current baseline
 
 - Live Worker: `https://afo-visual-browser-subagent-mcp.jaredtechfit.workers.dev`
-- Current Worker version: `0.2.0-phase1-evidence`
+- Current verified Worker version: `0.2.1-capture-reliability`
+- Release candidate version: `0.2.2-artifact-access`
 - Primary implementation: `src/worker.js`
 - Deployment workflow: `.github/workflows/deploy-afo-visual-browser-subagent.yml`
 - Existing tests: `test/url-policy.test.mjs`
@@ -27,11 +28,8 @@ Build a deterministic visual QA and controlled browser-interaction service that 
 - [x] Analytics Engine events
 - [x] Public read-only URL policy
 
-### Confirmed Phase 1 gaps
+### Remaining gaps after v0.2.1
 
-- `capture_screenshot` still executes the full snapshot pipeline.
-- Character-count truncation can exceed the UTF-8 byte limit.
-- An oversized optional artifact can fail an otherwise valid screenshot.
 - Artifact tools return object keys but not inspectable image or evidence content.
 - No temporary artifact-view URL exists.
 - No bounded click, type, keypress, scroll, drag, or multi-step interaction surface exists.
@@ -212,15 +210,15 @@ Outputs:
 
 ### Exact tasks
 
-- [ ] Add `get_visual_artifact` to MCP tools/list.
-- [ ] Resolve only artifact keys already recorded in the persisted manifest.
-- [ ] Reject arbitrary R2 key input.
-- [ ] Return text artifacts as bounded text or structured JSON.
-- [ ] Return small PNGs as MCP image content using base64 and MIME type.
-- [ ] Enforce a conservative inline binary limit.
-- [ ] Return metadata-only for oversized content.
-- [ ] Add SHA-256 integrity metadata to new captures.
-- [ ] Redact any sensitive URLs contained inside text evidence before return.
+- [x] Add `get_visual_artifact` to MCP tools/list.
+- [x] Resolve only artifact keys already recorded in the persisted manifest.
+- [x] Reject arbitrary R2 key input.
+- [x] Return text artifacts as bounded text or structured JSON.
+- [x] Return small PNGs as MCP image content using base64 and MIME type.
+- [x] Enforce a conservative inline binary limit.
+- [x] Return metadata-only for oversized content.
+- [x] Add SHA-256 integrity metadata to new captures.
+- [x] Redact any sensitive URLs contained inside text evidence before return.
 
 ### File-level change targets
 
@@ -239,7 +237,7 @@ Outputs:
 - [ ] Validate returned SHA-256 and byte size against R2.
 - [ ] Confirm a missing artifact returns a typed `artifact_not_found` response.
 
-## Feature 5 — Temporary signed artifact URLs
+## Feature 5 — Temporary signed artifact URLs (deferred; not part of v0.2.2)
 
 ### Recommended design
 
@@ -284,10 +282,12 @@ The Worker validates the signature and expiry, resolves the artifact through the
 ## Release gate for v0.2.2
 
 - [ ] All v0.2.1 gates remain green.
-- [ ] Actual Link Lane mobile and desktop PNGs are inspectable in chat or through temporary URLs.
+- [ ] Actual Link Lane mobile and desktop PNGs are inspectable in chat through MCP image content when below the inline limit.
 - [ ] Console and network evidence can be read, not merely counted.
-- [ ] Signed URLs expire and fail closed.
+- [ ] Oversized artifacts return metadata with `requires_url: true` without exposing a public URL.
 - [ ] No permanent public artifact exposure is introduced.
+
+Feature 5 signed URLs remain a separate deferred release and are not required for v0.2.2.
 
 ---
 
