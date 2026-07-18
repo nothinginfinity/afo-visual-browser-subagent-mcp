@@ -80,9 +80,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! npx wrangler@latest d1 info "$D1_NAME" --json > d1-info.json 2>/dev/null; then
-            npx wrangler@latest d1 create "$D1_NAME"
-            npx wrangler@latest d1 info "$D1_NAME" --json > d1-info.json
+          if ! npx wrangler@latest d1 info "$D1_NAME" --json --config wrangler.provision.jsonc > d1-info.json 2>/dev/null; then
+            npx wrangler@latest d1 create "$D1_NAME" --config wrangler.provision.jsonc
+            npx wrangler@latest d1 info "$D1_NAME" --json --config wrangler.provision.jsonc > d1-info.json
           fi
           node <<'NODE'
           const fs = require('fs');
@@ -110,28 +110,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! npx wrangler@latest r2 bucket list | grep -Fq "$R2_BUCKET"; then
-            npx wrangler@latest r2 bucket create "$R2_BUCKET"
+          if ! npx wrangler@latest r2 bucket list --config wrangler.provision.jsonc | grep -Fq "$R2_BUCKET"; then
+            npx wrangler@latest r2 bucket create "$R2_BUCKET" --config wrangler.provision.jsonc
           fi
 
       - name: Provision or reuse Vectorize index
         shell: bash
         run: |
           set -euo pipefail
-          if ! npx wrangler@latest vectorize list --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.exit(s.includes(process.env.VECTOR_INDEX)?0:1))"; then
-            npx wrangler@latest vectorize create "$VECTOR_INDEX" --dimensions=768 --metric=cosine
+          if ! npx wrangler@latest vectorize list --json --config wrangler.provision.jsonc | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.exit(s.includes(process.env.VECTOR_INDEX)?0:1))"; then
+            npx wrangler@latest vectorize create "$VECTOR_INDEX" --dimensions=768 --metric=cosine --config wrangler.provision.jsonc
           fi
 
       - name: Provision or reuse queues
         shell: bash
         run: |
           set -euo pipefail
-          QUEUES_JSON="$(npx wrangler@latest queues list --json)"
+          QUEUES_JSON="$(npx wrangler@latest queues list --json --config wrangler.provision.jsonc)"
           if ! printf '%s' "$QUEUES_JSON" | grep -Fq "$AUDIT_QUEUE"; then
-            npx wrangler@latest queues create "$AUDIT_QUEUE"
+            npx wrangler@latest queues create "$AUDIT_QUEUE" --config wrangler.provision.jsonc
           fi
           if ! printf '%s' "$QUEUES_JSON" | grep -Fq "$AUDIT_DLQ"; then
-            npx wrangler@latest queues create "$AUDIT_DLQ"
+            npx wrangler@latest queues create "$AUDIT_DLQ" --config wrangler.provision.jsonc
           fi
 
       - name: Apply D1 migrations
