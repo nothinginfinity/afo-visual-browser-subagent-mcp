@@ -1,0 +1,37 @@
+{
+  "worker": "afo-gitzip",
+  "version": "0.2.0-unified",
+  "action": "apply_repo_text_patch",
+  "target": {
+    "owner": "nothinginfinity",
+    "repo": "afo-visual-browser-subagent-mcp",
+    "branch": "main",
+    "path": "README.md"
+  },
+  "source_sha": "4edc288c3a1019f4e9d4b6e54ac2d317258564ae",
+  "result_sha": "5f5229834176b07d9c13f23545c45ed1d3d284a2",
+  "commit_sha": "2e00f71e11633f42cfa96b7225a6486aff1b6a2b",
+  "diff": {
+    "before_length": 1354,
+    "after_length": 1390,
+    "delta": 36,
+    "common_prefix": 6,
+    "common_suffix": 981,
+    "before_fingerprint": "74392d1b",
+    "after_fingerprint": "98275a81"
+  },
+  "applied": [
+    {
+      "label": "op_0",
+      "type": "replace_all",
+      "changed": true,
+      "replaced": 2
+    }
+  ],
+  "verification": {
+    "ok": true,
+    "results": [],
+    "failed": []
+  },
+  "timestamp": "2026-07-05T14:57:36.546Z"
+}
