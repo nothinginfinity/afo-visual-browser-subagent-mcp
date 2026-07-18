@@ -116,13 +116,21 @@ export function prepareJsonArtifact(value, maxBytes, { allowTruncate = true } = 
   };
 }
 
-function valueByteLength(value) {
-  if (typeof value === 'string') return utf8ByteLength(value);
-  if (value instanceof Uint8Array) return value.byteLength;
-  if (value instanceof ArrayBuffer) return value.byteLength;
-  if (ArrayBuffer.isView(value)) return value.byteLength;
-  if (value && typeof value.byteLength === 'number') return value.byteLength;
+function valueBytes(value) {
+  if (typeof value === 'string') return encoder.encode(value);
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   throw new TypeError('Unsupported artifact value type');
+}
+
+function valueByteLength(value) {
+  return valueBytes(value).byteLength;
+}
+
+export async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest('SHA-256', valueBytes(value));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function artifactResult(status, key, contentType, extras = {}) {
@@ -143,10 +151,12 @@ export async function storeBinaryArtifact(env, {
 }) {
   const bytes = valueByteLength(value);
   const maxBytes = normalizeLimit(limit);
+  const sha256 = await sha256Hex(value);
 
   if (!env?.RECEIPTS) {
     const result = artifactResult('failed', key, contentType, {
       bytes,
+      sha256,
       limit_bytes: maxBytes,
       error: 'RECEIPTS binding is not configured',
     });
@@ -161,6 +171,7 @@ export async function storeBinaryArtifact(env, {
   if (bytes > maxBytes) {
     const result = artifactResult('skipped_oversize', key, contentType, {
       bytes,
+      sha256,
       limit_bytes: maxBytes,
       error: `Artifact ${key} exceeded ${maxBytes} byte limit`,
     });
@@ -176,11 +187,13 @@ export async function storeBinaryArtifact(env, {
     await env.RECEIPTS.put(key, value, { httpMetadata: { contentType } });
     return artifactResult('stored', key, contentType, {
       bytes,
+      sha256,
       limit_bytes: maxBytes,
     });
   } catch (error) {
     const result = artifactResult('failed', key, contentType, {
       bytes,
+      sha256,
       limit_bytes: maxBytes,
       error: String(error?.message || error || 'artifact_write_failed').slice(0, 2000),
     });
