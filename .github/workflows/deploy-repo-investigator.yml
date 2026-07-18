@@ -1,0 +1,54 @@
+name: Deploy Repo Investigator
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-repo-investigator.yml
+      - subagents/repo-investigator/**
+      - scripts/deploy-one.mjs
+      - scripts/subagents.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-repo-investigator
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy afo-repo-investigator-mcp
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify required GitHub secrets are present
+        shell: bash
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Missing CLOUDFLARE_API_TOKEN GitHub secret"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Missing CLOUDFLARE_ACCOUNT_ID GitHub secret"
+            exit 1
+          fi
+
+      - name: Deploy Worker
+        shell: bash
+        run: npx wrangler@latest deploy --config subagents/repo-investigator/wrangler.jsonc
+
+      - name: Deployment note
+        shell: bash
+        run: |
+          echo "Deployed Worker: afo-repo-investigator-mcp"
+          echo "Next runtime secret to add in Cloudflare dashboard: GITHUB_TOKEN"
+          echo "After adding GITHUB_TOKEN, test /status and /mcp on the workers.dev URL shown above."
