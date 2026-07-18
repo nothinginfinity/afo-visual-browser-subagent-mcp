@@ -76,35 +76,13 @@ jobs:
           }
           JSON
 
-      - name: Provision or reuse D1
+      - name: Verify D1 binding
         shell: bash
         run: |
           set -euo pipefail
-          if ! npx wrangler@latest d1 info "$D1_NAME" --json --config wrangler.provision.jsonc > d1-info.json 2>/dev/null; then
-            npx wrangler@latest d1 create "$D1_NAME" --config wrangler.provision.jsonc
-            npx wrangler@latest d1 info "$D1_NAME" --json --config wrangler.provision.jsonc > d1-info.json
-          fi
-          node <<'NODE'
-          const fs = require('fs');
-          const info = JSON.parse(fs.readFileSync('d1-info.json', 'utf8'));
-          function findId(value) {
-            if (!value || typeof value !== 'object') return null;
-            for (const key of ['uuid', 'database_id', 'id']) {
-              if (typeof value[key] === 'string' && /^[0-9a-f-]{32,36}$/i.test(value[key])) return value[key];
-            }
-            for (const child of Object.values(value)) {
-              const found = findId(child);
-              if (found) return found;
-            }
-            return null;
-          }
-          const id = findId(info);
-          if (!id) throw new Error('Could not resolve D1 database UUID');
-          const source = fs.readFileSync('wrangler.jsonc', 'utf8');
-          if (!source.includes('REPLACE_WITH_D1_DATABASE_ID')) throw new Error('Expected D1 placeholder is missing');
-          fs.writeFileSync('wrangler.deploy.jsonc', source.replace('REPLACE_WITH_D1_DATABASE_ID', id));
-          console.log(`Resolved D1 database: ${id}`);
-          NODE
+          cp wrangler.jsonc wrangler.deploy.jsonc
+          npx wrangler@latest d1 info DB --json --config wrangler.deploy.jsonc > d1-info.json
+          node -e "const x=require('./d1-info.json'); const s=JSON.stringify(x); if(!s.includes('a963c0b4-4e2f-4bf3-ac54-cd5fb192e928')) process.exit(1)"
 
       - name: Provision or reuse R2 bucket
         shell: bash
