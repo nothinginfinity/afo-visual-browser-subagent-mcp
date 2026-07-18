@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "afo-d1-investigator-mcp",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-05",
+  "workers_dev": true,
+  "vars": {
+    "WORKER_NAME": "afo-d1-investigator-mcp"
+  },
+  "ai": {
+    "binding": "AI"
+  }
+}
