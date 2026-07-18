@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          QUEUES_JSON="$(npx wrangler@latest queues list --json --config wrangler.provision.jsonc)"
+          QUEUES_JSON="$(npx wrangler@latest queues list --config wrangler.provision.jsonc)"
           if ! printf '%s' "$QUEUES_JSON" | grep -Fq "$AUDIT_QUEUE"; then
             npx wrangler@latest queues create "$AUDIT_QUEUE" --config wrangler.provision.jsonc
           fi
