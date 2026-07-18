@@ -120,32 +120,63 @@ jobs:
         shell: bash
         run: npx wrangler@latest deploy --config wrangler.deploy.jsonc
 
-      - name: Smoke test live status
+      - name: Smoke test live status and deployed version
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4 5 6; do
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            echo "Status convergence attempt $attempt/12"
             if curl --fail --silent --show-error "$WORKER_URL/status" -o status.json; then
               cat status.json
-              node -e "const fs=require('fs');const status=JSON.parse(fs.readFileSync('status.json','utf8'));if(!status.ok)throw new Error('Live Worker status is not ok');const required=['BROWSER','AI','DB','RECEIPTS','VECTORIZE','AUDIT_QUEUE','ANALYTICS'];const missing=required.filter(name=>status.bindings?.[name]!==true);if(missing.length)throw new Error('Missing live bindings: '+missing.join(', '));"
-              exit 0
+              if node <<'NODE'
+          const fs = require('fs');
+          const expectedVersion = require('./package.json').version;
+          const status = JSON.parse(fs.readFileSync('status.json', 'utf8'));
+          if (!status.ok) throw new Error('Live Worker status is not ok');
+          if (status.version !== expectedVersion) {
+            throw new Error(`Live Worker version ${status.version ?? 'missing'} does not match expected ${expectedVersion}`);
+          }
+          const required = ['BROWSER', 'AI', 'DB', 'RECEIPTS', 'VECTORIZE', 'AUDIT_QUEUE', 'ANALYTICS'];
+          const missing = required.filter((name) => status.bindings?.[name] !== true);
+          if (missing.length) throw new Error(`Missing live bindings: ${missing.join(', ')}`);
+          NODE
+              then
+                exit 0
+              fi
             fi
             sleep 10
           done
-          echo "Live status endpoint did not become healthy"
+          echo "Live status endpoint did not converge to the expected version and bindings"
           exit 1
 
       - name: Smoke test live tool registration
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error "$WORKER_URL/tools" -o tools.json
-          node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('tools.json','utf8'));const names=(body.tools||[]).map(tool=>typeof tool==='string'?tool:tool.name);if(!names.includes('get_visual_artifact'))throw new Error('get_visual_artifact missing from /tools');"
-          curl --fail --silent --show-error \
-            -H 'content-type: application/json' \
-            --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-            "$WORKER_URL/mcp" -o mcp-tools.json
-          node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('mcp-tools.json','utf8'));const names=(body.result?.tools||[]).map(tool=>tool.name);if(!names.includes('get_visual_artifact'))throw new Error('get_visual_artifact missing from MCP tools/list');"
+          tools_ready=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            echo "/tools convergence attempt $attempt/12"
+            if curl --fail --silent --show-error "$WORKER_URL/tools" -o tools.json && node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('tools.json','utf8'));const names=(body.tools||[]).map(tool=>typeof tool==='string'?tool:tool.name);if(!names.includes('get_visual_artifact'))throw new Error('get_visual_artifact missing from /tools');"; then
+              tools_ready=true
+              break
+            fi
+            sleep 10
+          done
+          test "$tools_ready" = true || { echo "get_visual_artifact did not appear in /tools"; exit 1; }
+
+          mcp_ready=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            echo "MCP tools/list convergence attempt $attempt/12"
+            if curl --fail --silent --show-error \
+              -H 'content-type: application/json' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+              "$WORKER_URL/mcp" -o mcp-tools.json && node -e "const fs=require('fs');const body=JSON.parse(fs.readFileSync('mcp-tools.json','utf8'));const names=(body.result?.tools||[]).map(tool=>tool.name);if(!names.includes('get_visual_artifact'))throw new Error('get_visual_artifact missing from MCP tools/list');"; then
+              mcp_ready=true
+              break
+            fi
+            sleep 10
+          done
+          test "$mcp_ready" = true || { echo "get_visual_artifact did not appear in MCP tools/list"; exit 1; }
 
       - name: Deployment summary
         shell: bash
