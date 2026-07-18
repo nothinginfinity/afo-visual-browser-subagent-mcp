@@ -1,0 +1,59 @@
+name: Deploy D1 Investigator
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-d1-investigator.yml
+      - subagents/d1-investigator/**
+      - scripts/subagents.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-d1-investigator
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy afo-d1-investigator-mcp
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify required GitHub secrets are present
+        shell: bash
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "Missing CLOUDFLARE_API_TOKEN GitHub secret"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "Missing CLOUDFLARE_ACCOUNT_ID GitHub secret"
+            exit 1
+          fi
+
+      - name: Deploy Worker
+        shell: bash
+        run: npx wrangler@latest deploy --config subagents/d1-investigator/wrangler.jsonc
+
+      - name: Set Worker runtime secrets
+        shell: bash
+        run: |
+          printf '%s' "$CLOUDFLARE_API_TOKEN" | npx wrangler@latest secret put CF_API_TOKEN --config subagents/d1-investigator/wrangler.jsonc
+          printf '%s' "$CLOUDFLARE_ACCOUNT_ID" | npx wrangler@latest secret put CF_ACCOUNT_ID --config subagents/d1-investigator/wrangler.jsonc
+
+      - name: Deployment note
+        shell: bash
+        run: |
+          echo "Deployed Worker: afo-d1-investigator-mcp"
+          echo "Expected URL: https://afo-d1-investigator-mcp.jaredtechfit.workers.dev/status"
+          echo "Runtime secrets set from GitHub repo secrets: CF_API_TOKEN and CF_ACCOUNT_ID"
