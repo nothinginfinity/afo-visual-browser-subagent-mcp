@@ -4,6 +4,7 @@
   "main": "src/worker.js",
   "compatibility_date": "2026-07-18",
   "compatibility_flags": ["nodejs_compat"],
+  // Required secret, configured with `wrangler secret put ARTIFACT_SIGNING_SECRET`; never store its value here.
   "browser": { "binding": "BROWSER" },
   "ai": { "binding": "AI" },
   "d1_databases": [{ "binding": "DB", "database_name": "afo-visual-browser-subagent", "database_id": "a963c0b4-4e2f-4bf3-ac54-cd5fb192e928", "migrations_dir": "migrations" }],
