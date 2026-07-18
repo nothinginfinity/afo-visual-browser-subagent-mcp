@@ -1,0 +1,15 @@
+name: Deploy Receipt Investigator Alias
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  note:
+    name: Use canonical workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Note
+        run: echo "Use deploy-receipt-investigator.yml"
