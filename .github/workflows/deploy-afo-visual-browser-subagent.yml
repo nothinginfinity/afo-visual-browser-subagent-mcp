@@ -112,9 +112,9 @@ jobs:
             npx wrangler@latest queues create "$AUDIT_DLQ" --config wrangler.provision.jsonc
           fi
 
-      - name: Apply D1 migrations
+      - name: Apply D1 schema
         shell: bash
-        run: npx wrangler@latest d1 migrations apply DB --remote --config wrangler.deploy.jsonc --yes
+        run: npx wrangler@latest d1 execute DB --remote --file migrations/0001_initial.sql --config wrangler.deploy.jsonc --yes
 
       - name: Deploy Worker
         shell: bash
