@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "afo-repo-investigator-mcp",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-05",
+  "workers_dev": true,
+  "vars": {
+    "DEFAULT_OWNER": "nothinginfinity",
+    "WORKER_NAME": "afo-repo-investigator-mcp"
+  },
+  "ai": {
+    "binding": "AI"
+  }
+}
