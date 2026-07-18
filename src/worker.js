@@ -13,8 +13,9 @@ import {
   capturePng,
   collectPageEvidence,
 } from './capture.js';
+import { getVisualArtifact } from './artifact-access.js';
 
-const VERSION = '0.2.1-capture-reliability';
+const VERSION = '0.2.2-artifact-access';
 const NAME = 'afo-visual-browser-subagent-mcp';
 const LIMITS = {
   screenshot: 10 * 1024 * 1024,
@@ -824,6 +825,7 @@ function status(env) {
       'capture_multi_viewport',
       'enqueue_visual_audit',
       'get_visual_receipt',
+      'get_visual_artifact',
     ],
   };
 }
@@ -892,6 +894,24 @@ const tools = [
       },
     },
   },
+  {
+    name: 'get_visual_artifact',
+    description: 'Retrieve an artifact registered in a persisted visual receipt without accepting arbitrary R2 keys.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        investigation_id: { type: 'string' },
+        run_id: { type: 'string' },
+        artifact_type: {
+          type: 'string',
+          enum: ['screenshot', 'html', 'markdown', 'accessibility', 'console', 'network', 'manifest'],
+        },
+        viewport: {},
+        response_mode: { type: 'string', enum: ['auto', 'inline', 'metadata'] },
+      },
+      required: ['artifact_type'],
+    },
+  },
 ];
 
 async function call(env, name, args = {}) {
@@ -913,6 +933,7 @@ async function call(env, name, args = {}) {
   if (name === 'capture_multi_viewport') return multi(env, args);
   if (name === 'enqueue_visual_audit') return enqueue(env, args);
   if (name === 'get_visual_receipt') return getReceipt(env, args);
+  if (name === 'get_visual_artifact') return getVisualArtifact(env, args);
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -940,11 +961,14 @@ async function mcp(req, env) {
     } catch (error) {
       result = error.manifest || { ok: false, error: safeError(error) };
     }
+    const content = Array.isArray(result.mcp_content)
+      ? result.mcp_content
+      : [{ type: 'text', text: JSON.stringify(result, null, 2) }];
     return json({
       jsonrpc: '2.0',
       id,
       result: {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content,
         isError: result.ok === false,
       },
     });
