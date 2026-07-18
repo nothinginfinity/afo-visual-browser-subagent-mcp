@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "browser": { "binding": "BROWSER" },
   "ai": { "binding": "AI" },
-  "d1_databases": [{ "binding": "DB", "database_name": "afo-visual-browser-subagent", "database_id": "REPLACE_WITH_D1_DATABASE_ID", "migrations_dir": "migrations" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "afo-visual-browser-subagent", "database_id": "a963c0b4-4e2f-4bf3-ac54-cd5fb192e928", "migrations_dir": "migrations" }],
   "r2_buckets": [{ "binding": "RECEIPTS", "bucket_name": "afo-visual-browser-receipts" }],
   "vectorize": [{ "binding": "VECTORIZE", "index_name": "afo-visual-browser-evidence" }],
   "queues": {
