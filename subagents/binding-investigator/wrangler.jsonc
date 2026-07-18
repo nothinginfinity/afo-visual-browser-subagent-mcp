@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "afo-binding-investigator-mcp",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-05",
+  "workers_dev": true,
+  "vars": {
+    "WORKER_NAME": "afo-binding-investigator-mcp",
+    "DEFAULT_OWNER": "nothinginfinity",
+    "DEFAULT_REPO": "afo-visual-browser-subagent-mcp",
+    "DEFAULT_SCRIPT_NAME": "afo-cloudflare-deploy-investigator-mcp",
+    "DEFAULT_WRANGLER_PATH": "subagents/cloudflare-deploy-investigator/wrangler.jsonc"
+  },
+  "ai": {
+    "binding": "AI"
+  }
+}
