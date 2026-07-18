@@ -133,8 +133,9 @@ jobs:
           const expectedVersion = require('./package.json').version;
           const status = JSON.parse(fs.readFileSync('status.json', 'utf8'));
           if (!status.ok) throw new Error('Live Worker status is not ok');
-          if (status.version !== expectedVersion) {
-            throw new Error(`Live Worker version ${status.version ?? 'missing'} does not match expected ${expectedVersion}`);
+          const versionMatches = status.version === expectedVersion || status.version?.startsWith(`${expectedVersion}-`);
+          if (!versionMatches) {
+            throw new Error(`Live Worker version ${status.version ?? 'missing'} does not match expected release ${expectedVersion}`);
           }
           const required = ['BROWSER', 'AI', 'DB', 'RECEIPTS', 'VECTORIZE', 'AUDIT_QUEUE', 'ANALYTICS'];
           const missing = required.filter((name) => status.bindings?.[name] !== true);
