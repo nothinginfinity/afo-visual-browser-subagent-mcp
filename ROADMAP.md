@@ -237,7 +237,7 @@ Outputs:
 - [ ] Validate returned SHA-256 and byte size against R2.
 - [ ] Confirm a missing artifact returns a typed `artifact_not_found` response.
 
-## Feature 5 — Temporary signed artifact URLs (deferred; not part of v0.2.2)
+## Feature 5 — Temporary signed artifact URLs (implemented; live gate blocked on signing secret)
 
 ### Recommended design
 
@@ -249,17 +249,17 @@ The Worker validates the signature and expiry, resolves the artifact through the
 
 ### Exact tasks
 
-- [ ] Add MCP tool `create_visual_artifact_url`.
-- [ ] Add `ARTIFACT_SIGNING_SECRET` Worker secret.
-- [ ] Sign run ID, artifact type, viewport, and expiry with HMAC-SHA-256.
-- [ ] Default expiry to 10 minutes; enforce a maximum of 60 minutes.
-- [ ] Add the signed artifact route.
-- [ ] Set correct `Content-Type`.
-- [ ] Set `Cache-Control: private, no-store`.
-- [ ] Set `Content-Disposition: inline` for PNG and safe text.
-- [ ] Prevent directory traversal and arbitrary key access.
-- [ ] Do not include sensitive query values in logs or analytics.
-- [ ] Return an explicit expiration timestamp.
+- [x] Add MCP tool `create_visual_artifact_url`.
+- [ ] Configure `ARTIFACT_SIGNING_SECRET` in GitHub Actions and as a Worker secret (infrastructure prerequisite; value must never be committed).
+- [x] Sign run ID, artifact type, viewport, and expiry with HMAC-SHA-256.
+- [x] Default expiry to 10 minutes; enforce a maximum of 60 minutes.
+- [x] Add the signed artifact route.
+- [x] Set correct `Content-Type`.
+- [x] Set `Cache-Control: private, no-store`.
+- [x] Set `Content-Disposition: inline` for PNG and safe text.
+- [x] Prevent directory traversal and arbitrary key access.
+- [x] Do not include sensitive query values in logs or analytics.
+- [x] Return an explicit expiration timestamp.
 
 ### File-level change targets
 
@@ -274,9 +274,9 @@ The Worker validates the signature and expiry, resolves the artifact through the
 
 - [ ] Generate a temporary URL for a Link Lane PNG and load it before expiry.
 - [ ] Verify it returns the exact stored bytes and content type.
-- [ ] Verify expired URLs return `403`.
-- [ ] Verify tampered run ID, artifact type, viewport, expiry, or signature returns `403`.
-- [ ] Verify URLs cannot access an artifact not present in the run manifest.
+- [x] Verify expired URLs return `403` in deterministic tests.
+- [x] Verify tampered run ID, artifact type, viewport, expiry, or signature returns `403` in deterministic tests.
+- [x] Verify URLs cannot access an artifact not present in the run manifest in deterministic tests.
 - [ ] Verify the R2 bucket remains non-public.
 
 ## Release gate for v0.2.2
