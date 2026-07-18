@@ -127,14 +127,7 @@ jobs:
           for attempt in 1 2 3 4 5 6; do
             if curl --fail --silent --show-error "$WORKER_URL/status" -o status.json; then
               cat status.json
-              node <<'NODE'
-              const fs = require('fs');
-              const status = JSON.parse(fs.readFileSync('status.json', 'utf8'));
-              if (!status.ok) throw new Error('Live Worker status is not ok');
-              const required = ['BROWSER', 'AI', 'DB', 'RECEIPTS', 'VECTORIZE', 'AUDIT_QUEUE', 'ANALYTICS'];
-              const missing = required.filter(name => status.bindings?.[name] !== true);
-              if (missing.length) throw new Error(`Missing live bindings: ${missing.join(', ')}`);
-              NODE
+              node -e "const fs=require('fs');const status=JSON.parse(fs.readFileSync('status.json','utf8'));if(!status.ok)throw new Error('Live Worker status is not ok');const required=['BROWSER','AI','DB','RECEIPTS','VECTORIZE','AUDIT_QUEUE','ANALYTICS'];const missing=required.filter(name=>status.bindings?.[name]!==true);if(missing.length)throw new Error('Missing live bindings: '+missing.join(', '));"
               exit 0
             fi
             sleep 10
