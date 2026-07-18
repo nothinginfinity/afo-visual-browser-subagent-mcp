@@ -1,0 +1,33 @@
+name: Binding Investigator
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/deploy-binding-investigator.yml
+      - subagents/binding-investigator/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-binding-investigator
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy afo-binding-investigator-mcp
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Deploy Worker
+        shell: bash
+        run: npx wrangler@latest deploy --config subagents/binding-investigator/wrangler.jsonc
