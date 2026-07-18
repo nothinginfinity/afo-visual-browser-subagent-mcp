@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "afo-mcp-tool-auditor",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-05",
+  "workers_dev": true,
+  "vars": {
+    "WORKER_NAME": "afo-mcp-tool-auditor"
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "services": [
+    {
+      "binding": "REPO_INVESTIGATOR",
+      "service": "afo-repo-investigator-mcp"
+    },
+    {
+      "binding": "WORKER_INVESTIGATOR",
+      "service": "afo-visual-browser-investigator-mcp"
+    },
+    {
+      "binding": "D1_INVESTIGATOR",
+      "service": "afo-d1-investigator-mcp"
+    }
+  ]
+}
