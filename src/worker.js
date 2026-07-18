@@ -1,156 +1,98 @@
 import puppeteer from '@cloudflare/puppeteer';
 
-const VERSION = '0.1.0-phase1';
+const VERSION = '0.2.0-phase1-evidence';
 const NAME = 'afo-visual-browser-subagent-mcp';
+const LIMITS = { screenshot: 10 * 1024 * 1024, artifact: 2 * 1024 * 1024, text: 100000, logs: 500, redirects: 8 };
+const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5';
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, Mcp-Session-Id' };
-const VIEWPORTS = {
-  mobile: { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true },
-  tablet: { width: 820, height: 1180, deviceScaleFactor: 1, isMobile: true, hasTouch: true },
-  desktop: { width: 1440, height: 1000, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
-  wide: { width: 1920, height: 1080, deviceScaleFactor: 1, isMobile: false, hasTouch: false }
-};
+const VIEWPORTS = { mobile: { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, tablet: { width: 820, height: 1180, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, desktop: { width: 1440, height: 1000, deviceScaleFactor: 1, isMobile: false, hasTouch: false }, wide: { width: 1920, height: 1080, deviceScaleFactor: 1, isMobile: false, hasTouch: false } };
+const SECRET_QUERY = /token|key|secret|auth|password|signature|credential|session|jwt|code/i;
+const RETRYABLE = /timeout|timed out|temporar|network|connection|browser.*launch|internal|429|502|503|504/i;
 
-function json(value, status = 200) {
-  return new Response(JSON.stringify(value, null, 2), { status, headers: { ...CORS, 'content-type': 'application/json;charset=utf-8', 'cache-control': 'no-store' } });
-}
+function json(value, status = 200) { return new Response(JSON.stringify(value, null, 2), { status, headers: { ...CORS, 'content-type': 'application/json;charset=utf-8', 'cache-control': 'no-store' } }); }
 async function body(req) { try { return await req.json(); } catch { return {}; } }
-function clamp(v, lo, hi, fallback) { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback; }
+function clamp(value, low, high, fallback) { const n = Number(value); return Number.isFinite(n) ? Math.min(high, Math.max(low, n)) : fallback; }
+function truncate(value, max) { return String(value ?? '').slice(0, max); }
+function safeError(error) { return truncate(error?.message || error || 'unknown_error', 2000); }
+function deterministicId(value) { let hash = 2166136261; for (const byte of new TextEncoder().encode(value)) { hash ^= byte; hash = Math.imul(hash, 16777619); } return `vb_${(hash >>> 0).toString(16).padStart(8, '0')}`; }
 function targetUrl(raw) {
   const url = new URL(String(raw || '').trim());
   if (url.protocol !== 'https:') throw new Error('Only https URLs are allowed in public_readonly mode');
-  const h = url.hostname.toLowerCase();
-  if (h === 'localhost' || h.endsWith('.localhost')) throw new Error('Localhost targets are blocked');
-  if (/^(127\.|10\.|169\.254\.|192\.168\.|0\.)/.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)) throw new Error('Private IPv4 targets are blocked');
-  if (h === '::1' || h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80:')) throw new Error('Private IPv6 targets are blocked');
-  url.username = ''; url.password = '';
-  return url;
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) throw new Error('Localhost targets are blocked');
+  if (/^(0|10|127|169\.254|192\.168)\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) throw new Error('Private IPv4 targets are blocked');
+  if (/^(::|::1|fc|fd|fe80:)/i.test(host)) throw new Error('Private IPv6 targets are blocked');
+  url.username = ''; url.password = ''; return url;
 }
-function redact(url) {
-  const copy = new URL(url.toString());
-  for (const key of copy.searchParams.keys()) if (/token|key|secret|auth|password|signature/i.test(key)) copy.searchParams.set(key, '[REDACTED]');
-  return copy.toString();
-}
+function redact(urlLike) { const copy = new URL(urlLike.toString()); copy.username = ''; copy.password = ''; for (const key of [...copy.searchParams.keys()]) if (SECRET_QUERY.test(key)) copy.searchParams.set(key, '[REDACTED]'); copy.hash = ''; return copy.toString(); }
 function viewport(input) {
   if (typeof input === 'string' && VIEWPORTS[input]) return { name: input, ...VIEWPORTS[input] };
   if (input && typeof input === 'object') return { name: String(input.name || 'custom'), width: clamp(input.width, 240, 2560, 1440), height: clamp(input.height, 240, 2560, 1000), deviceScaleFactor: clamp(input.deviceScaleFactor, 1, 3, 1), isMobile: input.isMobile === true, hasTouch: input.hasTouch === true };
   return { name: 'desktop', ...VIEWPORTS.desktop };
 }
-function analytics(env, tool, status, runId, vp, host, duration, bytes = 0) {
-  env.ANALYTICS?.writeDataPoint({ blobs: [tool, status, vp || 'none', host || 'unknown'], doubles: [duration || 0, bytes], indexes: [runId] });
+function runId(args, vp, supplied) { return truncate(supplied || deterministicId(`${args.idempotency_key || crypto.randomUUID()}|${redact(targetUrl(args.url))}|${vp.name}|${vp.width}x${vp.height}`), 128); }
+function analytics(env, e) { try { env.ANALYTICS?.writeDataPoint({ blobs: [e.tool, e.hostname, e.viewport, e.mode, e.status, e.classification], doubles: [e.total, e.navigation, e.screenshot, e.evidence, e.consoleErrors, e.failedRequests, e.failedResponses], indexes: [e.runId] }); return true; } catch { return false; } }
+async function put(env, key, value, contentType, limit = LIMITS.artifact) { if (!env.RECEIPTS) return null; const bytes = typeof value === 'string' ? new TextEncoder().encode(value).byteLength : value.byteLength; if (bytes > limit) throw new Error(`Artifact ${key} exceeded ${limit} byte limit`); await env.RECEIPTS.put(key, value, { httpMetadata: { contentType } }); return key; }
+async function upsert(env, m) {
+  if (!env.DB) return;
+  await env.DB.prepare(`INSERT INTO visual_runs (run_id,kind,target_url,redacted_url,final_url,hostname,created_at,completed_at,status,viewport_name,viewport_width,viewport_height,artifact_keys_json,receipt_key,console_error_count,failed_request_count,failed_response_count,navigation_duration_ms,render_duration_ms,screenshot_duration_ms,duration_ms,queue_status,vector_status,error_class,error_message) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET completed_at=excluded.completed_at,status=excluded.status,artifact_keys_json=excluded.artifact_keys_json,receipt_key=excluded.receipt_key,console_error_count=excluded.console_error_count,failed_request_count=excluded.failed_request_count,failed_response_count=excluded.failed_response_count,navigation_duration_ms=excluded.navigation_duration_ms,render_duration_ms=excluded.render_duration_ms,screenshot_duration_ms=excluded.screenshot_duration_ms,duration_ms=excluded.duration_ms,queue_status=excluded.queue_status,vector_status=excluded.vector_status,error_class=excluded.error_class,error_message=excluded.error_message`).bind(m.run_id,m.kind,m.target_url,m.target_url,m.final_url||null,m.hostname||null,m.created_at,m.completed_at||null,m.status,m.viewport?.name||null,m.viewport?.width||null,m.viewport?.height||null,JSON.stringify(m.artifacts||{}),m.receipt_key||null,m.counts?.console_errors||0,m.counts?.failed_requests||0,m.counts?.failed_responses||0,m.timings?.navigation_ms||0,m.timings?.render_ms||0,m.timings?.screenshot_ms||0,m.duration_ms||0,m.queue_status||'synchronous',m.vector_status||'not_started',m.error_class||null,m.error||null).run();
 }
-async function receipt(env, data) {
-  const key = `runs/${data.run_id}/receipt.json`;
-  await env.RECEIPTS?.put(key, JSON.stringify(data, null, 2), { httpMetadata: { contentType: 'application/json' } });
-  if (env.DB) await env.DB.prepare('INSERT INTO visual_runs (run_id, kind, target_url, created_at, status, receipt_key, viewport_count, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(data.run_id, data.kind, data.target_url, data.created_at, data.ok ? 'ok' : 'error', key, data.viewport_count || 1, data.duration_ms || 0).run();
-  return key;
+async function persist(env, m) { const key = `runs/${m.run_id}/manifest.json`; m.receipt_key = env.RECEIPTS ? key : null; await put(env, key, JSON.stringify(m, null, 2), 'application/json; charset=utf-8'); await upsert(env, m); return key; }
+function collect(page) {
+  const e = { console: [], page_errors: [], failed_requests: [], failed_responses: [], redirects: [] };
+  page.on('console', x => { if (e.console.length < LIMITS.logs) e.console.push({ type: x.type(), text: truncate(x.text(), 2000), at: new Date().toISOString() }); });
+  page.on('pageerror', x => { if (e.page_errors.length < LIMITS.logs) e.page_errors.push({ message: safeError(x), at: new Date().toISOString() }); });
+  page.on('requestfailed', x => { if (e.failed_requests.length < LIMITS.logs) e.failed_requests.push({ url: redact(new URL(x.url())), method: x.method(), resource_type: x.resourceType(), failure: truncate(x.failure()?.errorText || 'unknown', 1000) }); });
+  page.on('response', x => { if (x.status() >= 400 && e.failed_responses.length < LIMITS.logs) e.failed_responses.push({ url: redact(new URL(x.url())), status: x.status(), status_text: truncate(x.statusText(), 300) }); });
+  return e;
 }
-async function open(env, args, vp) {
+async function openPage(env, args, vp) {
   if (!env.BROWSER) throw new Error('BROWSER binding is not configured');
-  const url = targetUrl(args.url);
-  const timeout = clamp(args.timeout_ms, 5000, 60000, 30000);
-  const browser = await puppeteer.launch(env.BROWSER);
-  const page = await browser.newPage();
-  await page.setViewport(vp);
-  page.setDefaultNavigationTimeout(timeout);
-  page.setDefaultTimeout(timeout);
-  const started = Date.now();
-  const response = await page.goto(url.toString(), { waitUntil: args.wait_until || 'networkidle2', timeout });
-  if (args.wait_for_selector) await page.waitForSelector(String(args.wait_for_selector), { timeout });
-  if (args.delay_ms) await new Promise(r => setTimeout(r, clamp(args.delay_ms, 0, 10000, 0)));
-  return { browser, page, url, response, started };
+  const initial = targetUrl(args.url), timeout = clamp(args.timeout_ms, 5000, 60000, 30000);
+  const browser = await puppeteer.launch(env.BROWSER), page = await browser.newPage(), evidence = collect(page);
+  await page.setViewport(vp); page.setDefaultNavigationTimeout(timeout); page.setDefaultTimeout(timeout);
+  const started = Date.now(); const response = await page.goto(initial.toString(), { waitUntil: ['load','domcontentloaded','networkidle0','networkidle2'].includes(args.wait_until) ? args.wait_until : 'networkidle2', timeout }); const navigationMs = Date.now() - started;
+  const chain = response?.request()?.redirectChain?.() || []; if (chain.length > LIMITS.redirects) throw new Error(`Redirect limit exceeded (${LIMITS.redirects})`);
+  for (const request of chain) evidence.redirects.push(redact(targetUrl(request.url())));
+  const finalUrl = targetUrl(page.url());
+  if (args.wait_for_selector) await page.waitForSelector(truncate(args.wait_for_selector, 500), { timeout });
+  const delay = clamp(args.delay_ms, 0, 10000, 0); if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+  return { browser, page, evidence, response, finalUrl, navigationMs };
 }
-async function capture(env, args, profile, kind = 'screenshot') {
-  const vp = viewport(profile);
-  const runId = crypto.randomUUID();
-  let browser;
+async function extract(page) {
+  const [html, dom, accessibility, performance] = await Promise.all([
+    page.content(),
+    page.evaluate(max => { const text=(document.body?.innerText||'').replace(/\u0000/g,'').slice(0,max); const headings=[...document.querySelectorAll('h1,h2,h3,h4,h5,h6')].slice(0,200).map(n=>({level:n.tagName.toLowerCase(),text:(n.innerText||'').trim().slice(0,500)})); const links=[...document.querySelectorAll('a[href]')].slice(0,500).map(n=>({text:(n.innerText||n.getAttribute('aria-label')||'').trim().slice(0,300),href:n.href})); const controls=[...document.querySelectorAll('button,input,select,textarea,[role="button"],[role="link"]')].slice(0,300).map(n=>({tag:n.tagName.toLowerCase(),role:n.getAttribute('role'),label:(n.getAttribute('aria-label')||n.innerText||n.getAttribute('placeholder')||'').trim().slice(0,300),disabled:Boolean(n.disabled)})); return {title:document.title,lang:document.documentElement.lang||null,ready_state:document.readyState,text,headings,links,controls,dimensions:{scroll_width:document.documentElement.scrollWidth,scroll_height:document.documentElement.scrollHeight,viewport_width:innerWidth,viewport_height:innerHeight}}; }, LIMITS.text),
+    page.accessibility.snapshot({ interestingOnly: false }),
+    page.evaluate(() => { const n=performance.getEntriesByType('navigation')[0]; return n ? {duration:n.duration,dom_content_loaded_ms:n.domContentLoadedEventEnd,load_event_ms:n.loadEventEnd,response_start_ms:n.responseStart,response_end_ms:n.responseEnd,transfer_size:n.transferSize,encoded_body_size:n.encodedBodySize,decoded_body_size:n.decodedBodySize} : null; })
+  ]);
+  return { html: truncate(html, LIMITS.artifact), dom, accessibility, performance };
+}
+function markdown(dom) { const lines = dom.title ? [`# ${dom.title}`] : []; for (const h of dom.headings || []) lines.push(`${'#'.repeat(Number(h.level.slice(1)) || 2)} ${h.text}`); if (dom.text) lines.push(dom.text); return truncate(lines.join('\n\n'), LIMITS.text); }
+async function index(env, m, docs) {
+  if (!env.VECTORIZE) return 'binding_missing'; if (!env.AI) return 'ai_binding_missing'; const records=[];
+  for (const doc of docs) { const text=truncate(doc.text,12000).trim(); if (!text) continue; const response=await env.AI.run(EMBEDDING_MODEL,{text:[text]}); const vector=response?.data?.[0]; if (!Array.isArray(vector)) throw new Error('Workers AI embedding response did not contain a vector'); records.push({id:`${m.run_id}:${doc.type}`,values:vector,metadata:{investigation_id:m.run_id,evidence_type:doc.type,url:m.target_url,hostname:m.hostname,viewport:m.viewport?.name||'none',captured_at:m.created_at,artifact_key:doc.key||m.receipt_key||''}}); }
+  if (records.length) await env.VECTORIZE.upsert(records); return records.length ? `indexed:${records.length}` : 'no_text';
+}
+async function pipeline(env, args, profile, options={}) {
+  const vp=viewport(profile??args.viewport), id=runId(args,vp,options.run_id), created=new Date().toISOString(), started=Date.now(); let browser; let m={ok:false,run_id:id,kind:options.kind||'snapshot',target_url:redact(targetUrl(args.url)),created_at:created,status:'running',viewport:vp,queue_status:options.queued?'processing':'synchronous',vector_status:'not_started',artifacts:{},counts:{},timings:{}};
   try {
-    const state = await open(env, args, vp); browser = state.browser;
-    const png = new Uint8Array(await state.page.screenshot({ type: 'png', fullPage: args.full_page !== false, captureBeyondViewport: true }));
-    if (png.byteLength > 10 * 1024 * 1024) throw new Error('Screenshot exceeded 10 MiB limit');
-    const shotKey = `runs/${runId}/${vp.name}.png`;
-    await env.RECEIPTS?.put(shotKey, png, { httpMetadata: { contentType: 'image/png' } });
-    const page = await state.page.evaluate(() => ({ title: document.title, lang: document.documentElement.lang || null, ready_state: document.readyState, scroll_width: document.documentElement.scrollWidth, scroll_height: document.documentElement.scrollHeight, viewport_width: innerWidth, viewport_height: innerHeight, text_preview: (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 1200) }));
-    const result = { ok: true, run_id: runId, kind, target_url: redact(state.url), final_url: redact(new URL(state.page.url())), created_at: new Date().toISOString(), viewport: vp, http_status: state.response?.status() || null, screenshot: { r2_key: env.RECEIPTS ? shotKey : null, content_type: 'image/png', bytes: png.byteLength }, page, duration_ms: Date.now() - state.started };
-    result.receipt_key = await receipt(env, result);
-    analytics(env, 'capture_screenshot', 'ok', runId, vp.name, state.url.hostname, result.duration_ms, png.byteLength);
-    return result;
+    await upsert(env,m); const state=await openPage(env,args,vp); browser=state.browser; const renderStart=Date.now(), data=await extract(state.page), renderMs=Date.now()-renderStart, shotStart=Date.now(), png=new Uint8Array(await state.page.screenshot({type:'png',fullPage:args.full_page!==false,captureBeyondViewport:true})), shotMs=Date.now()-shotStart; if(png.byteLength>LIMITS.screenshot) throw new Error('Screenshot exceeded 10 MiB limit'); const md=markdown(data.dom), base=`runs/${id}`;
+    const artifacts={screenshot:await put(env,`${base}/${vp.name}.png`,png,'image/png',LIMITS.screenshot),html:await put(env,`${base}/page.html`,data.html,'text/html; charset=utf-8'),markdown:await put(env,`${base}/page.md`,md,'text/markdown; charset=utf-8'),accessibility:await put(env,`${base}/accessibility.json`,JSON.stringify(data.accessibility,null,2),'application/json; charset=utf-8'),console:await put(env,`${base}/console.json`,JSON.stringify({console:state.evidence.console,page_errors:state.evidence.page_errors},null,2),'application/json; charset=utf-8'),network:await put(env,`${base}/network.json`,JSON.stringify({failed_requests:state.evidence.failed_requests,failed_responses:state.evidence.failed_responses,redirects:state.evidence.redirects},null,2),'application/json; charset=utf-8')};
+    m={...m,ok:true,status:'ok',completed_at:new Date().toISOString(),final_url:redact(state.finalUrl),hostname:state.finalUrl.hostname,http_status:state.response?.status()||null,title:data.dom.title,screenshot:{bytes:png.byteLength,width:vp.width,height:vp.height,full_page:args.full_page!==false},page:{title:data.dom.title,lang:data.dom.lang,ready_state:data.dom.ready_state,dimensions:data.dom.dimensions},navigation:{redirect_count:state.evidence.redirects.length,redirects:state.evidence.redirects,performance:data.performance},counts:{console_entries:state.evidence.console.length,console_errors:state.evidence.console.filter(x=>x.type==='error').length+state.evidence.page_errors.length,page_errors:state.evidence.page_errors.length,failed_requests:state.evidence.failed_requests.length,failed_responses:state.evidence.failed_responses.length,headings:data.dom.headings.length,links:data.dom.links.length,controls:data.dom.controls.length},timings:{navigation_ms:state.navigationMs,render_ms:renderMs,screenshot_ms:shotMs},duration_ms:Date.now()-started,artifacts};
+    await persist(env,m); try { m.vector_status=await index(env,m,[{type:'page_markdown',text:md,key:artifacts.markdown},{type:'accessibility',text:JSON.stringify(data.accessibility),key:artifacts.accessibility},{type:'console_errors',text:JSON.stringify(state.evidence.console.filter(x=>x.type==='error').concat(state.evidence.page_errors)),key:artifacts.console},{type:'network_errors',text:JSON.stringify(state.evidence.failed_requests.concat(state.evidence.failed_responses)),key:artifacts.network},{type:'manifest_summary',text:JSON.stringify({title:m.title,hostname:m.hostname,counts:m.counts,timings:m.timings}),key:m.receipt_key}]); } catch(error) { m.vector_status=`error:${safeError(error)}`; }
+    if(options.queued) m.queue_status='completed'; await persist(env,m); analytics(env,{tool:options.tool||'capture_snapshot',hostname:m.hostname,viewport:vp.name,mode:options.queued?'queued':'synchronous',status:'ok',classification:'success',runId:id,total:m.duration_ms,navigation:m.timings.navigation_ms,screenshot:m.timings.screenshot_ms,evidence:Object.keys(m.artifacts).length,consoleErrors:m.counts.console_errors,failedRequests:m.counts.failed_requests,failedResponses:m.counts.failed_responses}); return m;
+  } catch(error) {
+    m={...m,ok:false,status:'error',completed_at:new Date().toISOString(),duration_ms:Date.now()-started,queue_status:options.queued?'failed':'synchronous',error_class:RETRYABLE.test(safeError(error))?'retryable':'permanent',error:safeError(error)}; try{await persist(env,m);}catch{} analytics(env,{tool:options.tool||'capture_snapshot',hostname:new URL(m.target_url).hostname,viewport:vp.name,mode:options.queued?'queued':'synchronous',status:'error',classification:m.error_class,runId:id,total:m.duration_ms,navigation:0,screenshot:0,evidence:0,consoleErrors:0,failedRequests:0,failedResponses:0}); const wrapped=new Error(m.error); wrapped.retryable=m.error_class==='retryable'; wrapped.manifest=m; throw wrapped;
   } finally { await browser?.close(); }
 }
-async function snapshot(env, args) {
-  const vp = viewport(args.viewport), runId = crypto.randomUUID();
-  let browser;
-  try {
-    const state = await open(env, args, vp); browser = state.browser;
-    const [pngRaw, html, data] = await Promise.all([
-      state.page.screenshot({ type: 'png', fullPage: args.full_page !== false, captureBeyondViewport: true }),
-      state.page.content(),
-      state.page.evaluate(() => ({ title: document.title, headings: [...document.querySelectorAll('h1,h2,h3')].slice(0, 100).map(x => ({ level: x.tagName.toLowerCase(), text: (x.innerText || '').trim().slice(0, 300) })), links: [...document.querySelectorAll('a[href]')].slice(0, 200).map(x => ({ text: (x.innerText || '').trim().slice(0, 200), href: x.href })), buttons: [...document.querySelectorAll('button,[role="button"]')].slice(0, 100).map(x => ({ text: (x.innerText || x.getAttribute('aria-label') || '').trim().slice(0, 200), disabled: Boolean(x.disabled) })), landmarks: [...document.querySelectorAll('main,nav,header,footer,aside,[role]')].slice(0, 150).map(x => ({ tag: x.tagName.toLowerCase(), role: x.getAttribute('role'), label: x.getAttribute('aria-label') })), text: (document.body?.innerText || '').slice(0, 50000) }))
-    ]);
-    const png = new Uint8Array(pngRaw);
-    const keys = { screenshot: `runs/${runId}/${vp.name}.png`, html: `runs/${runId}/page.html`, snapshot: `runs/${runId}/snapshot.json` };
-    if (env.RECEIPTS) await Promise.all([env.RECEIPTS.put(keys.screenshot, png, { httpMetadata: { contentType: 'image/png' } }), env.RECEIPTS.put(keys.html, html, { httpMetadata: { contentType: 'text/html; charset=utf-8' } }), env.RECEIPTS.put(keys.snapshot, JSON.stringify(data, null, 2), { httpMetadata: { contentType: 'application/json' } })]);
-    const result = { ok: true, run_id: runId, kind: 'snapshot', target_url: redact(state.url), final_url: redact(new URL(state.page.url())), created_at: new Date().toISOString(), viewport: vp, http_status: state.response?.status() || null, artifacts: env.RECEIPTS ? keys : null, snapshot: data, html_chars: html.length, screenshot_bytes: png.byteLength, duration_ms: Date.now() - state.started };
-    result.receipt_key = await receipt(env, result);
-    analytics(env, 'capture_snapshot', 'ok', runId, vp.name, state.url.hostname, result.duration_ms, png.byteLength);
-    return result;
-  } finally { await browser?.close(); }
-}
-async function multi(env, args) {
-  const profiles = (Array.isArray(args.viewports) && args.viewports.length ? args.viewports : ['mobile', 'desktop']).slice(0, 6);
-  const results = [];
-  for (const profile of profiles) { try { results.push(await capture(env, args, profile)); } catch (e) { results.push({ ok: false, viewport: viewport(profile), error: String(e.message || e) }); } }
-  const out = { ok: results.every(x => x.ok), run_id: crypto.randomUUID(), kind: 'multi_viewport', target_url: redact(targetUrl(args.url)), created_at: new Date().toISOString(), viewport_count: profiles.length, results: results.map(x => ({ ok: x.ok, run_id: x.run_id, viewport: x.viewport, screenshot: x.screenshot, error: x.error })) };
-  out.receipt_key = await receipt(env, out);
-  return out;
-}
-async function enqueue(env, args) {
-  if (!env.VISUAL_AUDIT_QUEUE) throw new Error('VISUAL_AUDIT_QUEUE binding is not configured');
-  const job = { job_id: crypto.randomUUID(), type: String(args.type || 'multi_viewport'), url: redact(targetUrl(args.url)), viewports: args.viewports || ['mobile', 'desktop'], created_at: new Date().toISOString() };
-  await env.VISUAL_AUDIT_QUEUE.send(job);
-  return { ok: true, queued: true, ...job };
-}
-function status(env) {
-  return { ok: true, worker: NAME, version: VERSION, mode: 'public_readonly', bindings: { BROWSER: !!env.BROWSER, AI: !!env.AI, DB: !!env.DB, RECEIPTS: !!env.RECEIPTS, VECTORIZE: !!env.VECTORIZE, VISUAL_AUDIT_QUEUE: !!env.VISUAL_AUDIT_QUEUE, ANALYTICS: !!env.ANALYTICS }, tools: ['visual_browser_status', 'capture_screenshot', 'capture_snapshot', 'capture_multi_viewport', 'enqueue_visual_audit'] };
-}
-const tools = [
-  { name: 'visual_browser_status', description: 'Health check for all required Phase 1 bindings.', inputSchema: { type: 'object', properties: {} } },
-  { name: 'capture_screenshot', description: 'Capture one public HTTPS page screenshot plus deterministic metadata.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, viewport: {}, full_page: { type: 'boolean' }, wait_until: { type: 'string' }, wait_for_selector: { type: 'string' }, delay_ms: { type: 'number' }, timeout_ms: { type: 'number' } }, required: ['url'] } },
-  { name: 'capture_snapshot', description: 'Capture screenshot, HTML, headings, links, buttons, landmarks, and text evidence.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, viewport: {}, full_page: { type: 'boolean' }, wait_until: { type: 'string' }, wait_for_selector: { type: 'string' }, delay_ms: { type: 'number' }, timeout_ms: { type: 'number' } }, required: ['url'] } },
-  { name: 'capture_multi_viewport', description: 'Capture a page across up to six viewports and store a batch receipt.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, viewports: { type: 'array', items: {} }, full_page: { type: 'boolean' }, wait_until: { type: 'string' }, timeout_ms: { type: 'number' } }, required: ['url'] } },
-  { name: 'enqueue_visual_audit', description: 'Queue a screenshot, snapshot, or multi-viewport audit job.', inputSchema: { type: 'object', properties: { url: { type: 'string' }, type: { type: 'string' }, viewports: { type: 'array', items: { type: 'string' } } }, required: ['url'] } }
-];
-async function call(env, name, args = {}) {
-  if (name === 'visual_browser_status') return status(env);
-  if (name === 'capture_screenshot') return capture(env, args, args.viewport);
-  if (name === 'capture_snapshot') return snapshot(env, args);
-  if (name === 'capture_multi_viewport') return multi(env, args);
-  if (name === 'enqueue_visual_audit') return enqueue(env, args);
-  throw new Error(`Unknown tool: ${name}`);
-}
-async function mcp(req, env) {
-  const rpc = await body(req), id = rpc.id ?? null;
-  if (rpc.method === 'initialize') return json({ jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: NAME, version: VERSION } } });
-  if (rpc.method === 'notifications/initialized') return new Response(null, { status: 204, headers: CORS });
-  if (rpc.method === 'ping') return json({ jsonrpc: '2.0', id, result: {} });
-  if (rpc.method === 'tools/list') return json({ jsonrpc: '2.0', id, result: { tools } });
-  if (rpc.method === 'tools/call') { let result; try { result = await call(env, rpc.params?.name, rpc.params?.arguments || {}); } catch (e) { result = { ok: false, error: String(e.message || e) }; } return json({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], isError: result.ok === false } }); }
-  return json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } });
-}
-async function consume(batch, env) {
-  for (const message of batch.messages) {
-    try { const job = message.body || {}; if (job.type === 'screenshot') await capture(env, job, job.viewports?.[0]); else if (job.type === 'snapshot') await snapshot(env, job); else await multi(env, job); message.ack(); }
-    catch { message.retry(); }
-  }
-}
-export default {
-  async fetch(req, env) {
-    const url = new URL(req.url);
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
-    if (url.pathname === '/' || url.pathname === '/status' || url.pathname === '/health') return json(status(env));
-    if (url.pathname === '/tools') return json({ ok: true, tools });
-    if (url.pathname === '/mcp') return mcp(req, env);
-    if (req.method === 'POST' && url.pathname === '/call') { const b = await body(req); try { return json(await call(env, b.name, b.arguments || {})); } catch (e) { return json({ ok: false, error: String(e.message || e) }); } }
-    return json({ ok: false, error: 'not_found', worker: NAME }, 404);
-  },
-  queue: consume
-};
+async function multi(env,args,options={}) { const profiles=(Array.isArray(args.viewports)&&args.viewports.length?args.viewports:['mobile','desktop']).slice(0,6), batchId=options.run_id||deterministicId(`${args.idempotency_key||crypto.randomUUID()}|multi|${redact(targetUrl(args.url))}`), results=[]; for(let i=0;i<profiles.length;i++){try{results.push(await pipeline(env,args,profiles[i],{kind:'multi_viewport_item',tool:'capture_multi_viewport',queued:options.queued,run_id:`${batchId}_${i}`}));}catch(error){results.push(error.manifest||{ok:false,viewport:viewport(profiles[i]),error:safeError(error)});}} const m={ok:results.every(x=>x.ok),run_id:batchId,kind:'multi_viewport',target_url:redact(targetUrl(args.url)),created_at:new Date().toISOString(),completed_at:new Date().toISOString(),status:results.every(x=>x.ok)?'ok':'partial',viewport_count:profiles.length,queue_status:options.queued?'completed':'synchronous',vector_status:'child_records',results:results.map(x=>({ok:x.ok,run_id:x.run_id,viewport:x.viewport,receipt_key:x.receipt_key,error:x.error})),duration_ms:results.reduce((s,x)=>s+(x.duration_ms||0),0)}; await persist(env,m); return m; }
+async function enqueue(env,args) { if(!env.AUDIT_QUEUE) throw new Error('AUDIT_QUEUE binding is not configured'); const type=['screenshot','snapshot','multi_viewport'].includes(args.type)?args.type:'multi_viewport', vp=viewport(args.viewports?.[0]||args.viewport), id=runId(args,vp,args.investigation_id), job={job_id:id,investigation_id:id,type,url:redact(targetUrl(args.url)),viewports:args.viewports||['mobile','desktop'],viewport:args.viewport,full_page:args.full_page!==false,timeout_ms:clamp(args.timeout_ms,5000,60000,30000),attempts:0,created_at:new Date().toISOString()}; await env.AUDIT_QUEUE.send(job); if(env.DB) await env.DB.prepare('INSERT INTO audit_jobs (job_id,investigation_id,type,target_url,status,attempts,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(job_id) DO NOTHING').bind(id,id,type,job.url,'queued',0,job.created_at,job.created_at).run(); return {ok:true,queued:true,...job}; }
+async function getReceipt(env,args) { const id=truncate(args.investigation_id||args.run_id,128); if(!id) throw new Error('investigation_id is required'); const object=await env.RECEIPTS?.get(`runs/${id}/manifest.json`); if(object) return JSON.parse(await object.text()); if(env.DB){const row=await env.DB.prepare('SELECT * FROM visual_runs WHERE run_id = ?').bind(id).first(); if(row) return {ok:row.status==='ok',source:'d1',...row,artifact_keys:row.artifact_keys_json?JSON.parse(row.artifact_keys_json):{}};} return {ok:false,error:'receipt_not_found',investigation_id:id}; }
+function status(env) { return {ok:true,worker:NAME,version:VERSION,mode:'public_readonly',limits:LIMITS,bindings:{BROWSER:!!env.BROWSER,AI:!!env.AI,DB:!!env.DB,RECEIPTS:!!env.RECEIPTS,VECTORIZE:!!env.VECTORIZE,AUDIT_QUEUE:!!env.AUDIT_QUEUE,ANALYTICS:!!env.ANALYTICS},tools:['visual_browser_status','capture_screenshot','capture_snapshot','capture_multi_viewport','enqueue_visual_audit','get_visual_receipt']}; }
+const tools=[{name:'visual_browser_status',description:'Health check for all required Phase 1 bindings.',inputSchema:{type:'object',properties:{}}},{name:'capture_screenshot',description:'Capture screenshot and deterministic evidence manifest.',inputSchema:{type:'object',properties:{url:{type:'string'},viewport:{},full_page:{type:'boolean'},wait_until:{type:'string'},wait_for_selector:{type:'string'},delay_ms:{type:'number'},timeout_ms:{type:'number'},idempotency_key:{type:'string'}},required:['url']}},{name:'capture_snapshot',description:'Capture screenshot, HTML, Markdown, accessibility, console, network, timing, and DOM evidence.',inputSchema:{type:'object',properties:{url:{type:'string'},viewport:{},full_page:{type:'boolean'},wait_until:{type:'string'},wait_for_selector:{type:'string'},delay_ms:{type:'number'},timeout_ms:{type:'number'},idempotency_key:{type:'string'}},required:['url']}},{name:'capture_multi_viewport',description:'Run deterministic evidence across up to six viewports.',inputSchema:{type:'object',properties:{url:{type:'string'},viewports:{type:'array',items:{}},full_page:{type:'boolean'},wait_until:{type:'string'},timeout_ms:{type:'number'},idempotency_key:{type:'string'}},required:['url']}},{name:'enqueue_visual_audit',description:'Queue an idempotent visual audit.',inputSchema:{type:'object',properties:{url:{type:'string'},type:{type:'string'},viewport:{},viewports:{type:'array',items:{}},full_page:{type:'boolean'},timeout_ms:{type:'number'},investigation_id:{type:'string'},idempotency_key:{type:'string'}},required:['url']}},{name:'get_visual_receipt',description:'Read a persisted investigation manifest.',inputSchema:{type:'object',properties:{investigation_id:{type:'string'},run_id:{type:'string'}}}}];
+async function call(env,name,args={}) { if(name==='visual_browser_status')return status(env); if(name==='capture_screenshot')return pipeline(env,args,args.viewport,{kind:'screenshot',tool:'capture_screenshot'}); if(name==='capture_snapshot')return pipeline(env,args,args.viewport,{kind:'snapshot',tool:'capture_snapshot'}); if(name==='capture_multi_viewport')return multi(env,args); if(name==='enqueue_visual_audit')return enqueue(env,args); if(name==='get_visual_receipt')return getReceipt(env,args); throw new Error(`Unknown tool: ${name}`); }
+async function mcp(req,env) { const rpc=await body(req),id=rpc.id??null; if(rpc.method==='initialize')return json({jsonrpc:'2.0',id,result:{protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:NAME,version:VERSION}}}); if(rpc.method==='notifications/initialized')return new Response(null,{status:204,headers:CORS}); if(rpc.method==='ping')return json({jsonrpc:'2.0',id,result:{}}); if(rpc.method==='tools/list')return json({jsonrpc:'2.0',id,result:{tools}}); if(rpc.method==='tools/call'){let result;try{result=await call(env,rpc.params?.name,rpc.params?.arguments||{});}catch(error){result=error.manifest||{ok:false,error:safeError(error)};}return json({jsonrpc:'2.0',id,result:{content:[{type:'text',text:JSON.stringify(result,null,2)}],isError:result.ok===false}});} return json({jsonrpc:'2.0',id,error:{code:-32601,message:'Method not found'}}); }
+async function consume(batch,env) { for(const message of batch.messages){const job=message.body||{};try{if(env.DB)await env.DB.prepare('UPDATE audit_jobs SET status = ?, attempts = attempts + 1, updated_at = ? WHERE job_id = ?').bind('processing',new Date().toISOString(),job.job_id).run(); if(job.type==='screenshot')await pipeline(env,job,job.viewport||job.viewports?.[0],{kind:'screenshot',tool:'capture_screenshot',queued:true,run_id:job.investigation_id}); else if(job.type==='snapshot')await pipeline(env,job,job.viewport,{kind:'snapshot',tool:'capture_snapshot',queued:true,run_id:job.investigation_id}); else await multi(env,job,{queued:true,run_id:job.investigation_id}); if(env.DB)await env.DB.prepare('UPDATE audit_jobs SET status = ?, updated_at = ? WHERE job_id = ?').bind('completed',new Date().toISOString(),job.job_id).run(); message.ack();}catch(error){const attempts=Number(job.attempts||0)+1,retryable=error.retryable===true&&attempts<3;if(env.DB)await env.DB.prepare('UPDATE audit_jobs SET status = ?, attempts = ?, last_error = ?, updated_at = ? WHERE job_id = ?').bind(retryable?'retrying':'failed',attempts,safeError(error),new Date().toISOString(),job.job_id).run();if(retryable)message.retry({delaySeconds:Math.min(300,30*attempts)});else message.ack();}} }
+export { targetUrl, redact, viewport, deterministicId };
+export default { async fetch(req,env){const url=new URL(req.url);if(req.method==='OPTIONS')return new Response(null,{status:204,headers:CORS});if(url.pathname==='/'||url.pathname==='/status'||url.pathname==='/health')return json(status(env));if(url.pathname==='/tools')return json({ok:true,tools});if(url.pathname==='/mcp')return mcp(req,env);if(req.method==='POST'&&url.pathname==='/call'){const b=await body(req);try{return json(await call(env,b.name,b.arguments||{}));}catch(error){return json(error.manifest||{ok:false,error:safeError(error)},400);}}return json({ok:false,error:'not_found',worker:NAME},404);}, queue:consume };
