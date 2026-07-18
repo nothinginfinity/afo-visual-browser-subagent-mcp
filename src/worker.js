@@ -14,8 +14,12 @@ import {
   collectPageEvidence,
 } from './capture.js';
 import { getVisualArtifact } from './artifact-access.js';
+import {
+  createVisualArtifactUrl,
+  handleSignedArtifactRequest,
+} from './signed-artifacts.js';
 
-const VERSION = '0.2.2-artifact-access';
+const VERSION = '0.2.2-signed-artifact-urls';
 const NAME = 'afo-visual-browser-subagent-mcp';
 const LIMITS = {
   screenshot: 10 * 1024 * 1024,
@@ -817,6 +821,7 @@ function status(env) {
       VECTORIZE: !!env.VECTORIZE,
       AUDIT_QUEUE: !!env.AUDIT_QUEUE,
       ANALYTICS: !!env.ANALYTICS,
+      ARTIFACT_SIGNING_SECRET: typeof env.ARTIFACT_SIGNING_SECRET === 'string' && env.ARTIFACT_SIGNING_SECRET.length >= 32,
     },
     tools: [
       'visual_browser_status',
@@ -826,6 +831,7 @@ function status(env) {
       'enqueue_visual_audit',
       'get_visual_receipt',
       'get_visual_artifact',
+      'create_visual_artifact_url',
     ],
   };
 }
@@ -912,9 +918,27 @@ const tools = [
       required: ['artifact_type'],
     },
   },
+  {
+    name: 'create_visual_artifact_url',
+    description: 'Create a short-lived HMAC-signed URL for an artifact registered in a persisted visual receipt.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        investigation_id: { type: 'string' },
+        run_id: { type: 'string' },
+        artifact_type: {
+          type: 'string',
+          enum: ['screenshot', 'html', 'markdown', 'accessibility', 'console', 'network', 'manifest'],
+        },
+        viewport: {},
+        ttl_seconds: { type: 'integer', minimum: 1, maximum: 3600, default: 600 },
+      },
+      required: ['artifact_type'],
+    },
+  },
 ];
 
-async function call(env, name, args = {}) {
+async function call(env, name, args = {}, options = {}) {
   if (name === 'visual_browser_status') return status(env);
   if (name === 'capture_screenshot') {
     return pipeline(env, args, args.viewport, {
@@ -934,6 +958,9 @@ async function call(env, name, args = {}) {
   if (name === 'enqueue_visual_audit') return enqueue(env, args);
   if (name === 'get_visual_receipt') return getReceipt(env, args);
   if (name === 'get_visual_artifact') return getVisualArtifact(env, args);
+  if (name === 'create_visual_artifact_url') {
+    return createVisualArtifactUrl(env, args, { origin: options.origin });
+  }
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -957,7 +984,9 @@ async function mcp(req, env) {
   if (rpc.method === 'tools/call') {
     let result;
     try {
-      result = await call(env, rpc.params?.name, rpc.params?.arguments || {});
+      result = await call(env, rpc.params?.name, rpc.params?.arguments || {}, {
+        origin: new URL(req.url).origin,
+      });
     } catch (error) {
       result = error.manifest || { ok: false, error: safeError(error) };
     }
@@ -1038,11 +1067,14 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     if (url.pathname === '/' || url.pathname === '/status' || url.pathname === '/health') return json(status(env));
     if (url.pathname === '/tools') return json({ ok: true, tools });
+    if (url.pathname.startsWith('/artifacts/')) return handleSignedArtifactRequest(req, env);
     if (url.pathname === '/mcp') return mcp(req, env);
     if (req.method === 'POST' && url.pathname === '/call') {
       const requestBody = await body(req);
       try {
-        return json(await call(env, requestBody.name, requestBody.arguments || {}));
+        return json(await call(env, requestBody.name, requestBody.arguments || {}, {
+          origin: url.origin,
+        }));
       } catch (error) {
         return json(error.manifest || { ok: false, error: safeError(error) }, 400);
       }
