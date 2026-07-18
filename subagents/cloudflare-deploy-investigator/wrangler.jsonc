@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "afo-cloudflare-deploy-investigator-mcp",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-05",
+  "workers_dev": true,
+  "vars": {
+    "WORKER_NAME": "afo-cloudflare-deploy-investigator-mcp",
+    "DEFAULT_OWNER": "nothinginfinity",
+    "DEFAULT_REPO": "afo-visual-browser-subagent-mcp",
+    "DEFAULT_SCRIPT_NAME": "afo-github-actions-investigator-mcp",
+    "ACCOUNT_SUBDOMAIN": "jaredtechfit"
+  },
+  "ai": {
+    "binding": "AI"
+  }
+}
