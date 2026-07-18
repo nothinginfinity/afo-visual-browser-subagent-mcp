@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   deriveArtifactOutcome,
+  sha256Hex,
   storeBinaryArtifact,
   storeTextArtifact,
 } from '../src/artifacts.js';
@@ -21,6 +22,7 @@ test('oversized optional UTF-8 text is truncated and stored independently', asyn
   assert.equal(result.status, 'truncated');
   assert.equal(writes.length, 1);
   assert.ok(new TextEncoder().encode(writes[0].value).byteLength <= 64);
+  assert.equal(result.sha256, await sha256Hex(writes[0].value));
 });
 
 test('optional binary oversize is skipped while required binary oversize fails', async () => {
@@ -32,6 +34,7 @@ test('optional binary oversize is skipped while required binary oversize fails',
     limit: 4,
   });
   assert.equal(optional.status, 'skipped_oversize');
+  assert.equal(optional.sha256.length, 64);
   await assert.rejects(() => storeBinaryArtifact(env, {
     key: 'required.png',
     value: new Uint8Array(10),
