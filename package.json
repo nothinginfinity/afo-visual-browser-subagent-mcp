@@ -1,0 +1,18 @@
+{
+  "name": "afo-visual-browser-subagent-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check worker.js",
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^1.0.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

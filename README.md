@@ -1,38 +1,38 @@
 # AFO Visual Browser Sub-Agent MCP
 
-Reusable MCP template for building AFO sub-agents that answer from gathered context instead of guessing.
+Cloudflare-native visual evidence and browser-investigation service. Phase 1 is deliberately public, read-only, deterministic, and receipt-first.
 
-This repo was cloned from `nothinginfinity/afo-subagent-mcp` and keeps the working repo-reader implementation as the first reference pattern.
+## Phase 1 tools
 
-## Pattern
+- `visual_browser_status`
+- `capture_screenshot`
+- `capture_snapshot`
+- `capture_multi_viewport`
+- `enqueue_visual_audit`
 
-```text
-question -> probes -> plan -> search -> evidence windows -> selected context -> synthesis -> audit trail
-```
+## Required initial bindings
 
-## Reference tools in this clone
+- Browser Rendering: `BROWSER`
+- Workers AI: `AI`
+- D1: `DB`
+- R2: `RECEIPTS`
+- Vectorize: `VECTORIZE`
+- Queues: `VISUAL_AUDIT_QUEUE`
+- Analytics Engine: `ANALYTICS`
 
-- `subagent_status`
-- `list_repo_files`
-- `grep_repo_plan`
-- `grep_repo`
-- `read_file_range`
-- `ask_repo_light`
-- `ask_files`
-- `ask_repo`
-- `investigate_repo`
+Vectorize, Queues, and Analytics Engine are foundational requirements, not optional roadmap items.
 
-## How to clone this for a new sub-agent
+## Security boundary
 
-Keep the same internal flow, then swap the domain layer.
+Phase 1 accepts public `https:` URLs only. Localhost, private IPv4 ranges, link-local ranges, and private IPv6 ranges are blocked. Query parameters that look like credentials are redacted from receipts.
 
-Examples:
+## Before deployment
 
-- repo files become Worker source, D1 tables, R2 objects, CairnStone chain records, messages, receipts, or site artifacts
-- grep becomes the domain search method
-- file ranges become source ranges, SQL rows, object metadata, event slices, or chain stone expansions
-- `investigate_repo` becomes `investigate_worker`, `investigate_database`, `investigate_chain`, or another domain-specific investigation tool
+1. Create the D1 database, R2 bucket, Vectorize index, producer/consumer queue, dead-letter queue, and Analytics Engine dataset.
+2. Replace `REPLACE_WITH_D1_DATABASE_ID` in `wrangler.jsonc`.
+3. Add `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to GitHub Actions or your local environment.
+4. Apply D1 migrations.
+5. Run `npm install`, `npm run check`, and `npm test`.
+6. Deploy and verify `/status`, MCP initialization, and one screenshot against a safe public test page.
 
-## Build guide
-
-See `docs/PATTERN.md` for the full template contract and clone checklist.
+See `ROADMAP.md` for the complete build order.
