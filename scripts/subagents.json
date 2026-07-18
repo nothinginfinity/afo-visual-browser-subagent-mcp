@@ -1,0 +1,54 @@
+{
+  "repo": "nothinginfinity/afo-visual-browser-subagent-mcp",
+  "secret_names": [
+    "GITHUB_TOKEN",
+    "CF_API_TOKEN",
+    "CF_ACCOUNT_ID",
+    "AFO_ADMIN_TOKEN",
+    "AFO_SHARED_SECRET"
+  ],
+  "subagents": [
+    {
+      "id": "repo-investigator",
+      "worker_name": "afo-repo-investigator-mcp",
+      "path": "subagents/repo-investigator",
+      "status": "reference-clone",
+      "primary_tool": "investigate_repo"
+    },
+    {
+      "id": "visual-browser-investigator",
+      "worker_name": "afo-visual-browser-investigator-mcp",
+      "path": "subagents/visual-browser-investigator",
+      "status": "deployable",
+      "primary_tool": "investigate_worker"
+    },
+    {
+      "id": "d1-investigator",
+      "worker_name": "afo-d1-investigator-mcp",
+      "path": "subagents/d1-investigator",
+      "status": "planned",
+      "primary_tool": "investigate_database"
+    },
+    {
+      "id": "mcp-tool-auditor",
+      "worker_name": "afo-mcp-tool-auditor",
+      "path": "subagents/mcp-tool-auditor",
+      "status": "planned",
+      "primary_tool": "investigate_mcp_tool"
+    },
+    {
+      "id": "deploy-receipt-investigator",
+      "worker_name": "afo-deploy-receipt-investigator-mcp",
+      "path": "subagents/deploy-receipt-investigator",
+      "status": "planned",
+      "primary_tool": "investigate_deploy_receipts"
+    },
+    {
+      "id": "cairnstone-chain-investigator",
+      "worker_name": "afo-cairnstone-chain-investigator-mcp",
+      "path": "subagents/cairnstone-chain-investigator",
+      "status": "planned",
+      "primary_tool": "investigate_chain"
+    }
+  ]
+}
