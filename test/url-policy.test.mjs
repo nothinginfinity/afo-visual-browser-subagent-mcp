@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const source = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
 
 test('worker declares all required initial bindings', () => {
   for (const binding of ['BROWSER', 'AI', 'DB', 'RECEIPTS', 'VECTORIZE', 'VISUAL_AUDIT_QUEUE', 'ANALYTICS']) {
